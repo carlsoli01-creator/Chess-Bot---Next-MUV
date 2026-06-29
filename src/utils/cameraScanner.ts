@@ -1,6 +1,14 @@
 import { BoardState } from '../types';
 
 export async function requestCameraAccess(): Promise<MediaStream> {
+    // Request the optional camera permission through the Chrome extension API first.
+    // This prevents the popup from closing before the browser permission prompt appears.
+    if (typeof chrome !== 'undefined' && chrome.permissions) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const granted = await (chrome.permissions as any).request({ permissions: ['camera'] });
+        if (!granted) throw new Error('Camera permission not granted');
+    }
+
     return navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
     });
@@ -45,18 +53,20 @@ export function detectChessboardInFrame(video: HTMLVideoElement): DetectionResul
                     for (let col = 0; col < 7; col++) {
                         const x1 = Math.floor(sx + (col + 0.5) * cell);
                         const x2 = Math.floor(sx + (col + 1.5) * cell);
-                        const y = Math.floor(sy + (row + 0.5) * cell);
+                        const y  = Math.floor(sy + (row + 0.5) * cell);
                         if (x2 >= W || y >= H) continue;
                         if (Math.abs(brightness(x1, y) - brightness(x2, y)) > 25) score++;
                         total++;
                     }
-                    for (let col = 0; col < 8; col++) {
-                        const x = Math.floor(sx + (col + 0.5) * cell);
-                        const y1 = Math.floor(sy + (row + 0.5) * cell);
-                        const y2 = Math.floor(sy + ((row < 7 ? row + 1 : row) + 0.5) * cell);
-                        if (row >= 7 || x >= W || y2 >= H) continue;
-                        if (Math.abs(brightness(x, y1) - brightness(x, y2)) > 25) score++;
-                        total++;
+                    if (row < 7) {
+                        for (let col = 0; col < 8; col++) {
+                            const x  = Math.floor(sx + (col + 0.5) * cell);
+                            const y1 = Math.floor(sy + (row + 0.5) * cell);
+                            const y2 = Math.floor(sy + (row + 1.5) * cell);
+                            if (x >= W || y2 >= H) continue;
+                            if (Math.abs(brightness(x, y1) - brightness(x, y2)) > 25) score++;
+                            total++;
+                        }
                     }
                 }
 
@@ -70,8 +80,5 @@ export function detectChessboardInFrame(video: HTMLVideoElement): DetectionResul
 }
 
 export function extractBoardStateFromFrame(_video: HTMLVideoElement): BoardState {
-    // Without an on-device ML model we cannot reliably read piece positions from a
-    // camera image, so we return an empty board state which causes the move estimator
-    // to fall back to its ELO-bucketed opening-move probability table.
     return { pieces: {}, turn: 'white' };
 }

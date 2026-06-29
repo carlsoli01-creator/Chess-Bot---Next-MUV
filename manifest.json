@@ -2,11 +2,12 @@
   "manifest_version": 3,
   "name": "Chess Move Predictor",
   "version": "1.0",
-  "description": "A browser extension that predicts the most likely move in a chess position based on the player's Elo rating.",
+  "description": "Predicts the best next move for the bottom player on chess.com based on real engine analysis.",
   "permissions": [
     "activeTab",
     "scripting"
   ],
+  "optional_permissions": ["camera"],
   "background": {
     "service_worker": "dist/background.js"
   },

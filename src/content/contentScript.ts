@@ -1,255 +1,184 @@
-﻿// contentScript.ts
 import BoardObserver from './boardObserver';
-import { MoveEstimator } from '../models/moveEstimator';
-import { sendMessageToBackground } from '../utils/chessUtils';
-import { BoardState, ChessMove } from '../types';
+import { getBestMove, formatMove, detectPlayerColor } from '../engine/chessEngine';
+import { BoardState } from '../types';
 
-const boardObserver = new BoardObserver();
-const scanOverlay = createScanOverlay();
+const playerColor = detectPlayerColor(); // 'w' = white at bottom, 'b' = black at bottom
+const opponentTurn = playerColor === 'w' ? 'black' : 'white';
+const playerTurn   = playerColor === 'w' ? 'white' : 'black';
 
 let lastBoardState: BoardState | null = null;
 let lastTurn: 'white' | 'black' | null = null;
-let predictionVisible = false;
-let awaitingPlayerMove = false;
+let calculating = false;
+
+const overlay = createOverlay();
+const boardObserver = new BoardObserver();
 
 boardObserver.onBoardChange((boardState: BoardState) => {
-    const playerElo = getPlayerElo();
-    const moveEstimator = new MoveEstimator(playerElo);
-    const predictedMove: ChessMove = moveEstimator.estimateMove(boardState);
+    const turnChanged = lastTurn !== null && lastTurn !== boardState.turn;
+    const playerJustMoved = turnChanged && lastTurn === playerTurn;
+    const opponentJustMoved = turnChanged && lastTurn === opponentTurn;
 
-    sendMessageToBackground({
-        type: 'PREDICTED_MOVE',
-        boardState,
-        predictedMove,
-        playerElo,
-    });
-
-    updateScanOverlay(boardState, predictedMove);
-});
-
-function updateScanOverlay(boardState: BoardState, predictedMove: ChessMove) {
-    if (!scanOverlay) {
-        return;
+    // After player moves → opponent's turn → calculate best next move for player
+    if (playerJustMoved && !calculating) {
+        overlay.setStatus('calculating');
+        calculating = true;
+        // Defer so we don't block the page
+        setTimeout(() => {
+            const move = getBestMove(boardState, playerColor, 3);
+            calculating = false;
+            if (move) {
+                overlay.showMove(formatMove(move));
+            } else {
+                overlay.setStatus('idle');
+            }
+        }, 0);
     }
 
-    const boardChanged = !lastBoardState || !areBoardStatesEqual(lastBoardState, boardState);
-    const turnChanged = lastTurn !== null && lastTurn !== boardState.turn;
+    // After opponent moves → player's turn → refresh prediction immediately
+    if (opponentJustMoved && !calculating) {
+        overlay.setStatus('calculating');
+        calculating = true;
+        setTimeout(() => {
+            const move = getBestMove(boardState, playerColor, 3);
+            calculating = false;
+            if (move) {
+                overlay.showMove(formatMove(move));
+            } else {
+                overlay.setStatus('idle');
+            }
+        }, 0);
+    }
 
-    if (!lastBoardState) {
-        scanOverlay.setText(formatMoveText(predictedMove));
-        predictionVisible = true;
-        awaitingPlayerMove = false;
-    } else if (boardChanged || turnChanged) {
-        if (predictionVisible) {
-            scanOverlay.clearText();
-            predictionVisible = false;
-            awaitingPlayerMove = true;
-        } else if (awaitingPlayerMove) {
-            scanOverlay.setText(formatMoveText(predictedMove));
-            predictionVisible = true;
-            awaitingPlayerMove = false;
-        }
+    // Initial load — show first prediction
+    if (!lastBoardState && !calculating) {
+        calculating = true;
+        setTimeout(() => {
+            const move = getBestMove(boardState, playerColor, 3);
+            calculating = false;
+            if (move) {
+                overlay.showMove(formatMove(move));
+            } else {
+                overlay.setStatus('idle');
+            }
+        }, 0);
     }
 
     lastBoardState = boardState;
     lastTurn = boardState.turn;
-}
+});
 
-function areBoardStatesEqual(a: BoardState, b: BoardState) {
-    if (a.turn !== b.turn) {
-        return false;
-    }
+// ─── Overlay UI ──────────────────────────────────────────────────────────────
 
-    const aKeys = Object.keys(a.pieces).sort();
-    const bKeys = Object.keys(b.pieces).sort();
-    if (aKeys.length !== bKeys.length) {
-        return false;
-    }
-
-    for (let i = 0; i < aKeys.length; i += 1) {
-        if (aKeys[i] !== bKeys[i]) {
-            return false;
-        }
-        if (a.pieces[aKeys[i]] !== b.pieces[bKeys[i]]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-function formatMoveText(move: ChessMove) {
-    const pieceType = move.piece.replace(/^[wb]/i, '');
-    const destination = move.to.toUpperCase();
-    const promotion = move.promotion ? move.promotion.toUpperCase() : '';
-
-    const rawText = pieceType === 'P' ? `${destination}${promotion}` : `${pieceType}${destination}${promotion}`;
-    return rawText.length <= 3 ? rawText : rawText.slice(0, 3);
-}
-
-function createScanOverlay() {
-    const container = document.createElement('div');
-    const button = document.createElement('div');
-    const screen = document.createElement('div');
+function createOverlay() {
     const style = document.createElement('style');
-
     style.textContent = `
-        .cmp-scan-overlay {
+        .cmp-overlay {
             position: fixed;
-            top: 12px;
-            right: 12px;
-            z-index: 999999999;
+            top: 14px;
+            right: 14px;
+            z-index: 2147483647;
             display: flex;
             align-items: center;
-            background: transparent;
+            gap: 8px;
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid rgba(99, 102, 241, 0.5);
             border-radius: 999px;
-            pointer-events: auto;
+            padding: 6px 14px 6px 10px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5);
             user-select: none;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+            cursor: grab;
+            backdrop-filter: blur(4px);
+            transition: border-color 0.3s;
         }
+        .cmp-overlay.calculating { border-color: rgba(250, 204, 21, 0.6); }
+        .cmp-overlay.detected    { border-color: rgba(34, 197, 94, 0.6); }
 
-        .cmp-scan-button {
-            width: 18px;
-            height: 18px;
-            background: #d12d2d;
+        .cmp-dot {
+            width: 10px; height: 10px;
             border-radius: 50%;
-            box-shadow: 0 0 0 rgba(209, 45, 45, 0.7);
-            animation: cmp-blink 1.2s infinite ease-in-out;
-            margin-right: 8px;
-            border: 1px solid rgba(255,255,255,0.35);
+            background: #6366f1;
+            flex-shrink: 0;
+            transition: background 0.3s;
+        }
+        .cmp-overlay.calculating .cmp-dot {
+            background: #facc15;
+            animation: cmp-pulse 0.8s infinite;
+        }
+        .cmp-overlay.detected .cmp-dot { background: #22c55e; }
+
+        @keyframes cmp-pulse {
+            0%,100% { transform: scale(1); opacity: 1; }
+            50%      { transform: scale(1.3); opacity: 0.6; }
         }
 
-        @keyframes cmp-blink {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(209,45,45,0.7); }
-            50% { transform: scale(1.15); box-shadow: 0 0 10px 6px rgba(209,45,45,0.2); }
-        }
-
-        .cmp-move-screen {
-            min-width: 40px;
-            min-height: 24px;
-            padding: 4px 8px;
-            background: rgba(255,255,255,0.95);
-            color: #111;
-            font-family: monospace, ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', Menlo;
-            font-size: 14px;
-            letter-spacing: 0.04em;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        .cmp-label {
+            font-family: monospace, ui-monospace, 'Courier New';
+            font-size: 15px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            color: #e2e8f0;
+            min-width: 32px;
+            text-align: center;
             text-transform: uppercase;
-            pointer-events: none;
         }
-
-        .cmp-scan-overlay.dragging {
-            opacity: 0.88;
-        }
+        .cmp-overlay.calculating .cmp-label { color: #fbbf24; }
+        .cmp-overlay.detected    .cmp-label { color: #86efac; }
     `;
-
-    container.className = 'cmp-scan-overlay';
-    button.className = 'cmp-scan-button';
-    screen.className = 'cmp-move-screen';
-    screen.textContent = '...';
-
-    container.appendChild(button);
-    container.appendChild(screen);
-    document.body.appendChild(container);
     document.head.appendChild(style);
 
-    let isDragging = false;
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let initialLeft = 0;
-    let initialTop = 0;
+    const container = document.createElement('div');
+    container.className = 'cmp-overlay';
 
-    container.style.left = 'auto';
-    container.style.top = '12px';
-    container.style.right = '12px';
+    const dot = document.createElement('span');
+    dot.className = 'cmp-dot';
 
-    container.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0) {
-            return;
-        }
+    const label = document.createElement('span');
+    label.className = 'cmp-label';
+    label.textContent = '...';
 
-        isDragging = true;
-        container.classList.add('dragging');
-        dragStartX = event.clientX;
-        dragStartY = event.clientY;
-        const rect = container.getBoundingClientRect();
-        initialLeft = rect.left;
-        initialTop = rect.top;
-        container.setPointerCapture(event.pointerId);
-        event.preventDefault();
-    });
+    container.appendChild(dot);
+    container.appendChild(label);
+    document.body.appendChild(container);
 
-    container.addEventListener('pointermove', (event) => {
-        if (!isDragging) {
-            return;
-        }
-
-        const deltaX = event.clientX - dragStartX;
-        const deltaY = event.clientY - dragStartY;
-        const nextLeft = Math.max(0, Math.min(window.innerWidth - container.offsetWidth, initialLeft + deltaX));
-        const nextTop = Math.max(0, Math.min(window.innerHeight - container.offsetHeight, initialTop + deltaY));
-        container.style.left = `${nextLeft}px`;
-        container.style.top = `${nextTop}px`;
+    // Draggable
+    let dragging = false, ox = 0, oy = 0, il = 0, it = 0;
+    container.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        const r = container.getBoundingClientRect();
+        ox = e.clientX; oy = e.clientY;
+        il = r.left; it = r.top;
         container.style.right = 'auto';
+        container.style.left = il + 'px';
+        container.style.top  = it + 'px';
+        container.setPointerCapture(e.pointerId);
+        e.preventDefault();
     });
-
-    container.addEventListener('pointerup', (event) => {
-        if (!isDragging) {
-            return;
-        }
-
-        isDragging = false;
-        container.classList.remove('dragging');
-        container.releasePointerCapture(event.pointerId);
+    container.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const nl = Math.max(0, Math.min(window.innerWidth  - container.offsetWidth,  il + e.clientX - ox));
+        const nt = Math.max(0, Math.min(window.innerHeight - container.offsetHeight, it + e.clientY - oy));
+        container.style.left = nl + 'px';
+        container.style.top  = nt + 'px';
+    });
+    container.addEventListener('pointerup', (e) => {
+        dragging = false;
+        container.releasePointerCapture(e.pointerId);
     });
 
     return {
-        setText(text: string) {
-            screen.textContent = text || '';
+        showMove(text: string) {
+            label.textContent = text || '?';
+            container.className = 'cmp-overlay detected';
         },
-        clearText() {
-            screen.textContent = '';
+        setStatus(s: 'idle' | 'calculating') {
+            if (s === 'calculating') {
+                label.textContent = '...';
+                container.className = 'cmp-overlay calculating';
+            } else {
+                label.textContent = '-';
+                container.className = 'cmp-overlay';
+            }
         },
     };
-}
-
-function getPlayerElo(): number {
-    const topEloSelectors = [
-        '.user-elo',
-        '.player-elo',
-        '.rating',
-        '.game-player-elo',
-        '.player-rating',
-        '.top-user-elo',
-        '.top-player-rating',
-        '.header-elo',
-        '.profile-elo',
-    ];
-
-    for (const selector of topEloSelectors) {
-        const eloElement = document.querySelector<HTMLElement>(selector);
-        const eloText = eloElement?.textContent?.trim();
-        if (eloText) {
-            const parsed = Number(eloText.replace(/[^\d]/g, ''));
-            if (!Number.isNaN(parsed) && parsed > 0) {
-                return parsed;
-            }
-        }
-    }
-
-    const topSection = document.querySelector<HTMLElement>('header, .top-bar, .top-section, .top-content');
-    if (topSection) {
-        const topText = topSection.textContent?.trim();
-        if (topText) {
-            const parsed = Number(topText.replace(/[^\d]/g, ''));
-            if (!Number.isNaN(parsed) && parsed > 0) {
-                return parsed;
-            }
-        }
-    }
-
-    return 1500;
 }
