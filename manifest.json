@@ -8,30 +8,20 @@
     "scripting"
   ],
   "background": {
-    "service_worker": "src/background/background.ts"
+    "service_worker": "dist/background.js"
   },
   "content_scripts": [
     {
       "matches": ["*://www.chess.com/*"],
-      "js": ["src/content/contentScript.ts"]
+      "js": ["dist/contentScript.js"]
     }
   ],
   "action": {
-    "default_popup": "src/popup/popup.html",
-    "default_icon": {
-      "16": "images/icon16.png",
-      "48": "images/icon48.png",
-      "128": "images/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "images/icon16.png",
-    "48": "images/icon48.png",
-    "128": "images/icon128.png"
+    "default_popup": "src/popup/popup.html"
   },
   "web_accessible_resources": [
     {
-      "resources": ["images/*"],
+      "resources": ["dist/*"],
       "matches": ["<all_urls>"]
     }
   ]
