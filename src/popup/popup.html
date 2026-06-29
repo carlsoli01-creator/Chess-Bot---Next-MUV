@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess Move Predictor</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div id="popup-container">
+        <h1>Chess Move Predictor</h1>
+        <div id="elo-rating">
+            <label for="elo-input">Enter Elo Rating:</label>
+            <input type="number" id="elo-input" placeholder="Elo Rating">
+        </div>
+        <div id="predicted-moves">
+            <h2>Predicted Moves:</h2>
+            <ul id="moves-list"></ul>
+        </div>
+        <button id="predict-button">Predict Move</button>
+    </div>
+    <script src="popup.tsx"></script>
+</body>
+</html>
