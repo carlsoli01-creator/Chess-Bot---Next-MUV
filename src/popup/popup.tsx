@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { render } from 'react-dom';
 import { MoveEstimator } from '../models/moveEstimator';
 import { requestCameraAccess, detectChessboardInFrame, extractBoardStateFromFrame } from '../utils/cameraScanner';
 import './popup.css';
@@ -157,3 +158,5 @@ const Popup = () => {
 };
 
 export default Popup;
+
+render(<Popup />, document.getElementById('root'));
