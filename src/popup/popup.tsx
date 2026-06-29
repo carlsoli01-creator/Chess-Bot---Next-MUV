@@ -1,124 +1,157 @@
-﻿import React, { useEffect, useState } from 'react';
-import { MoveEstimator, getPredictedMoves } from '../models/moveEstimator';
-import { scanBoardPhoto } from '../utils/photoScanner';
-import { scanBoardText } from '../utils/boardParser';
-import { ChessMove } from '../types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { MoveEstimator } from '../models/moveEstimator';
+import { requestCameraAccess, detectChessboardInFrame, extractBoardStateFromFrame } from '../utils/cameraScanner';
 import './popup.css';
 
+type ScanStatus = 'idle' | 'requesting' | 'scanning' | 'detected' | 'not-detected' | 'error';
+
 const Popup = () => {
-    const [predictedMoves, setPredictedMoves] = useState<string[]>([]);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const timerRef = useRef<number | null>(null);
+
     const [eloRating, setEloRating] = useState<number>(1200);
-    const [photoStatus, setPhotoStatus] = useState<string>('No photo uploaded');
-    const [photoMove, setPhotoMove] = useState<ChessMove | null>(null);
-    const [pasteInput, setPasteInput] = useState<string>('');
-    const [pasteMove, setPasteMove] = useState<ChessMove | null>(null);
-    const [pasteStatus, setPasteStatus] = useState<string>('Paste FEN or ASCII board text here');
+    const [status, setStatus] = useState<ScanStatus>('idle');
+    const [statusMessage, setStatusMessage] = useState<string>('Press Start Camera to begin.');
+    const [predictedMove, setPredictedMove] = useState<string | null>(null);
+    const [cameraActive, setCameraActive] = useState<boolean>(false);
 
-    useEffect(() => {
-        const fetchPredictedMoves = async () => {
-            const moves = await getPredictedMoves(eloRating);
-            setPredictedMoves(moves);
-        };
-
-        fetchPredictedMoves();
-    }, [eloRating]);
-
-    const handleEloChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const value = Number(event.target.value);
-        setEloRating(Number.isNaN(value) ? 0 : value);
-    };
-
-    const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file) {
-            setPhotoStatus('No photo selected.');
-            return;
+    const stopCamera = useCallback(() => {
+        if (timerRef.current !== null) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
         }
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        setCameraActive(false);
+        setStatus('idle');
+        setStatusMessage('Camera stopped. Press Start Camera to try again.');
+        setPredictedMove(null);
+    }, []);
 
-        setPhotoStatus('Scanning photo...');
+    const scanFrame = useCallback((elo: number) => {
+        const video = videoRef.current;
+        if (!video || video.readyState < 2) return;
 
+        setStatus('scanning');
+        const result = detectChessboardInFrame(video);
+
+        if (result.detected) {
+            const boardState = extractBoardStateFromFrame(video);
+            const estimator = new MoveEstimator(elo);
+            const move = estimator.estimateMove(boardState);
+            const moveText = move.piece === 'P'
+                ? move.to.toUpperCase()
+                : `${move.piece}${move.to.toUpperCase()}`;
+            setPredictedMove(moveText);
+            setStatus('detected');
+            setStatusMessage(`Chess board detected — ${Math.round(result.confidence * 100)}% confidence`);
+        } else {
+            setPredictedMove(null);
+            setStatus('not-detected');
+            setStatusMessage('No chess board visible. Point your camera at the board.');
+        }
+    }, []);
+
+    const startCamera = useCallback(async () => {
+        setStatus('requesting');
+        setStatusMessage('Requesting camera access...');
         try {
-            const boardState = await scanBoardPhoto(file);
-            const moveEstimator = new MoveEstimator(eloRating);
-            const predictedMove = moveEstimator.estimateMove(boardState);
-            setPhotoMove(predictedMove);
-            setPhotoStatus('Photo scanned. Prediction generated from placeholder board extraction.');
-        } catch (error) {
-            setPhotoStatus('Photo scan failed. Please try another image.');
-            console.error('Photo scan error:', error);
+            const stream = await requestCameraAccess();
+            streamRef.current = stream;
+
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                await videoRef.current.play();
+            }
+
+            setCameraActive(true);
+            setStatusMessage('Camera active — scanning...');
+
+            // First scan after video is ready (~800 ms), then every 2 seconds
+            setTimeout(() => scanFrame(eloRating), 800);
+            timerRef.current = window.setInterval(() => {
+                setEloRating((current) => {
+                    scanFrame(current);
+                    return current;
+                });
+            }, 2000);
+        } catch {
+            setStatus('error');
+            setStatusMessage('Camera access denied. Please allow camera permissions and try again.');
         }
+    }, [eloRating, scanFrame]);
+
+    useEffect(() => () => stopCamera(), [stopCamera]);
+
+    const handleEloChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = parseInt(e.target.value, 10);
+        setEloRating(Number.isNaN(val) ? 1200 : val);
     };
 
-    const handlePasteChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setPasteInput(event.target.value);
-    };
-
-    const handlePasteSubmit = () => {
-        try {
-            const boardState = scanBoardText(pasteInput);
-            const moveEstimator = new MoveEstimator(eloRating);
-            const predictedMove = moveEstimator.estimateMove(boardState);
-            setPasteMove(predictedMove);
-            setPasteStatus('Paste input parsed successfully.');
-        } catch (error) {
-            setPasteStatus(`Parse failed: ${error instanceof Error ? error.message : 'invalid board text'}`);
-            setPasteMove(null);
-        }
-    };
+    const statusColor =
+        status === 'detected' ? '#22c55e'
+        : status === 'not-detected' || status === 'error' ? '#ef4444'
+        : status === 'scanning' || status === 'requesting' ? '#facc15'
+        : '#64748b';
 
     return (
         <div className="popup">
             <h1>Chess Move Predictor</h1>
-            <label>
-                Elo Rating:
+
+            <div className="elo-row">
+                <label htmlFor="elo-input">Your Elo</label>
                 <input
+                    id="elo-input"
                     type="number"
                     value={eloRating}
                     onChange={handleEloChange}
+                    min={100}
+                    max={3000}
                 />
-            </label>
-            <label>
-                Upload Board Photo:
-                <input type="file" accept="image/*" onChange={handlePhotoUpload} />
-            </label>
-            <p>{photoStatus}</p>
-            {photoMove && (
-                <div>
-                    <h2>Photo Prediction:</h2>
-                    <p>
-                        {photoMove.piece} from {photoMove.from} to {photoMove.to}
-                        {photoMove.promotion ? ` promotion ${photoMove.promotion}` : ''}
-                    </p>
+            </div>
+
+            <div className="camera-section">
+                <video
+                    ref={videoRef}
+                    className={`camera-feed${cameraActive ? ' active' : ''}`}
+                    muted
+                    playsInline
+                />
+                {!cameraActive ? (
+                    <button className="btn btn-start" type="button" onClick={startCamera}>
+                        Start Camera
+                    </button>
+                ) : (
+                    <button className="btn btn-stop" type="button" onClick={stopCamera}>
+                        Stop Camera
+                    </button>
+                )}
+            </div>
+
+            <div className="status-bar" style={{ borderColor: statusColor }}>
+                <span className="status-dot" style={{ background: statusColor }} />
+                <span className="status-text">{statusMessage}</span>
+            </div>
+
+            {predictedMove && (
+                <div className="move-result">
+                    <span className="move-label">Predicted Move</span>
+                    <span className="move-value">{predictedMove}</span>
                 </div>
             )}
-            <section>
-                <h2>Paste Board Text</h2>
-                <textarea
-                    value={pasteInput}
-                    onChange={handlePasteChange}
-                    placeholder="Paste FEN or ASCII board text here"
-                    rows={8}
-                />
-                <button type="button" onClick={handlePasteSubmit}>
-                    Parse and Predict
-                </button>
-                <p>{pasteStatus}</p>
-                {pasteMove && (
-                    <div>
-                        <h3>Paste Prediction:</h3>
-                        <p>
-                            {pasteMove.piece} from {pasteMove.from} to {pasteMove.to}
-                            {pasteMove.promotion ? ` promotion ${pasteMove.promotion}` : ''}
-                        </p>
-                    </div>
-                )}
-            </section>
-            <h2>Predicted Moves:</h2>
-            <ul>
-                {predictedMoves.map((move, index) => (
-                    <li key={index}>{move}</li>
-                ))}
-            </ul>
+
+            {status === 'not-detected' && (
+                <p className="error-msg">
+                    No chess board detected. Make sure the board fills most of the camera view and is well-lit.
+                </p>
+            )}
+
+            {status === 'error' && (
+                <p className="error-msg">
+                    Could not access camera. Open Chrome settings and allow camera for this extension, then try again.
+                </p>
+            )}
         </div>
     );
 };
