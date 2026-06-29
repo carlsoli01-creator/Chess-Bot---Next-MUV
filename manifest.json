@@ -2,12 +2,12 @@
   "manifest_version": 3,
   "name": "Chess Move Predictor",
   "version": "1.0",
-  "description": "Predicts the best next move for the bottom player on chess.com based on real engine analysis.",
-  "permissions": [
-    "activeTab",
-    "scripting"
-  ],
+  "description": "Stockfish-powered move suggestions for chess.com — live overlay shows your best next move.",
+  "permissions": ["activeTab", "scripting"],
   "optional_permissions": ["camera"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "background": {
     "service_worker": "dist/background.js"
   },
@@ -22,8 +22,11 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["dist/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "dist/stockfish-18-lite-single.js",
+        "dist/stockfish-18-lite-single.wasm"
+      ],
+      "matches": ["*://www.chess.com/*"]
     }
   ]
 }
