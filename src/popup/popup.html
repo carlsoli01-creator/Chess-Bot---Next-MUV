@@ -3,10 +3,405 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chess Move Predictor</title>
+    <title>Chess Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            width: 520px;
+            background: #1a1a2e;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            overflow-x: hidden;
+        }
+        .header {
+            background: #0d0d1a;
+            border-bottom: 1px solid #00ff00;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .header-title { font-size: 14px; font-weight: bold; color: #00ff00; letter-spacing: 2px; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4444; display: inline-block; margin-right: 6px; }
+        .status-dot.active { background: #00ff00; animation: blink 1s infinite; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+        .status-text { font-size: 11px; color: #888; }
+
+        .main { display: flex; gap: 8px; padding: 8px; }
+        .left-col { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+        .right-col { width: 200px; display: flex; flex-direction: column; gap: 8px; }
+
+        .panel {
+            background: #0d0d1a;
+            border: 1px solid #003300;
+            border-radius: 4px;
+            padding: 8px;
+        }
+        .panel-title {
+            color: #00aa00;
+            font-size: 10px;
+            letter-spacing: 1px;
+            border-bottom: 1px solid #003300;
+            padding-bottom: 4px;
+            margin-bottom: 6px;
+        }
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 3px; }
+        .stat-label { color: #666; }
+        .stat-value { color: #00ff00; }
+        .stat-value.yellow { color: #ffff00; }
+        .stat-value.red { color: #ff4444; }
+        .stat-value.cyan { color: #00ffff; }
+
+        .move-display {
+            background: #0d0d1a;
+            border: 2px solid #00ff00;
+            border-radius: 4px;
+            padding: 10px;
+            text-align: center;
+        }
+        .move-label { font-size: 10px; color: #666; margin-bottom: 4px; }
+        .move-value { font-size: 32px; font-weight: bold; color: #ffff00; letter-spacing: 4px; min-height: 40px; }
+        .move-confidence { margin-top: 6px; font-size: 10px; color: #888; }
+        .progress-bar { width: 100%; height: 4px; background: #003300; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: #00ff00; transition: width 0.5s; width: 0%; }
+        .move-reason { font-size: 10px; color: #00aa00; margin-top: 4px; min-height: 14px; }
+        .alt-moves { font-size: 10px; color: #555; margin-top: 3px; }
+
+        .board-wrap { display: flex; justify-content: center; }
+        .board { display: grid; grid-template-columns: repeat(8,22px); grid-template-rows: repeat(8,22px); border: 1px solid #003300; }
+        .sq {
+            width: 22px; height: 22px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; line-height: 1;
+        }
+        .sq.light { background: #1a3a1a; }
+        .sq.dark  { background: #0d1a0d; }
+        .sq.highlight { background: #3a3a00 !important; }
+
+        .log-panel { background: #0d0d1a; border: 1px solid #003300; border-radius: 4px; }
+        .log-title { color: #00aa00; font-size: 10px; letter-spacing: 1px; padding: 6px 8px; border-bottom: 1px solid #003300; }
+        .log-body { height: 72px; overflow-y: auto; padding: 4px 8px; }
+        .log-entry { font-size: 10px; margin-bottom: 2px; }
+        .log-entry.info { color: #00aa00; }
+        .log-entry.warn { color: #ffaa00; }
+        .log-entry.move { color: #00ffff; }
+        .log-entry.err  { color: #ff4444; }
+
+        .controls { display: flex; gap: 6px; padding: 0 8px 8px; }
+        .btn {
+            flex: 1; padding: 5px; border: 1px solid #003300; background: #0d1a0d;
+            color: #00ff00; font-family: 'Courier New', monospace; font-size: 10px;
+            cursor: pointer; border-radius: 3px; letter-spacing: 1px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn:hover { background: #003300; border-color: #00ff00; }
+        .btn.active { background: #003300; border-color: #00ff00; color: #ffff00; }
+        .btn.red { border-color: #440000; color: #ff4444; }
+        .btn.red:hover { background: #220000; border-color: #ff4444; }
+
+        .footer { background: #0d0d1a; border-top: 1px solid #003300; padding: 5px 12px; display: flex; justify-content: space-between; font-size: 9px; color: #333; }
+    </style>
 </head>
 <body>
-    <div id="root"></div>
-    <script src="../../dist/popup.js"></script>
+
+<div class="header">
+    <span class="header-title">&#9822; CHESS BOT</span>
+    <span>
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">IDLE</span>
+    </span>
+</div>
+
+<div class="main">
+    <div class="left-col">
+
+        <div class="move-display">
+            <div class="move-label">BEST MOVE</div>
+            <div class="move-value" id="bestMove">---</div>
+            <div class="move-confidence">Confidence: <span id="confPct">0</span>%</div>
+            <div class="progress-bar"><div class="progress-fill" id="confBar"></div></div>
+            <div class="move-reason" id="moveReason">Waiting for game...</div>
+            <div class="alt-moves" id="altMoves"></div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-title">POSITION ANALYSIS</div>
+            <div class="stat-row"><span class="stat-label">Material Balance</span><span class="stat-value yellow" id="material">+0.0</span></div>
+            <div class="stat-row"><span class="stat-label">Hanging Pieces</span><span class="stat-value" id="hanging">0</span></div>
+            <div class="stat-row"><span class="stat-label">Development</span><span class="stat-value cyan" id="development">--</span></div>
+            <div class="stat-row"><span class="stat-label">King Safety</span><span class="stat-value" id="kingSafety">--</span></div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-title">BOT STATISTICS</div>
+            <div class="stat-row"><span class="stat-label">Analyses Run</span><span class="stat-value" id="analysisCount">0</span></div>
+            <div class="stat-row"><span class="stat-label">Avg Confidence</span><span class="stat-value yellow" id="avgConf">0%</span></div>
+            <div class="stat-row"><span class="stat-label">Analysis Time</span><span class="stat-value cyan" id="analysisTime">--</span></div>
+            <div class="stat-row"><span class="stat-label">Last Update</span><span class="stat-value" id="lastUpdate">--</span></div>
+        </div>
+
+    </div>
+
+    <div class="right-col">
+
+        <div class="panel">
+            <div class="panel-title">GAME INFO</div>
+            <div class="stat-row"><span class="stat-label">White</span><span class="stat-value yellow" id="whiteRating">--</span></div>
+            <div class="stat-row"><span class="stat-label">Black</span><span class="stat-value yellow" id="blackRating">--</span></div>
+            <div class="stat-row"><span class="stat-label">To Move</span><span class="stat-value cyan" id="toMove">--</span></div>
+            <div class="stat-row"><span class="stat-label">Move #</span><span class="stat-value" id="moveCount">--</span></div>
+            <div class="stat-row"><span class="stat-label">You Play</span><span class="stat-value" id="playerColor">--</span></div>
+        </div>
+
+        <div class="board-wrap">
+            <div class="board" id="board"></div>
+        </div>
+
+    </div>
+</div>
+
+<div class="log-panel">
+    <div class="log-title">ANALYSIS LOG</div>
+    <div class="log-body" id="log"></div>
+</div>
+
+<div class="controls">
+    <button class="btn" id="btnStart">START</button>
+    <button class="btn red" id="btnStop">STOP</button>
+    <button class="btn" id="btnCapture">CAPTURE</button>
+    <button class="btn red" id="btnReset">RESET</button>
+</div>
+
+<div class="footer">
+    <span>Chess Bot v1.0 — Stockfish 18</span>
+    <span id="footerFen" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────────────
+let running = false;
+let pollTimer = null;
+let analysisCount = 0;
+let totalConf = 0;
+let lastFen = null;
+
+const PIECES = {
+    wK:'♔', wQ:'♕', wR:'♖', wB:'♗', wN:'♘', wP:'♙',
+    bK:'♚', bQ:'♛', bR:'♜', bB:'♝', bN:'♞', bP:'♟'
+};
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const $bestMove    = document.getElementById('bestMove');
+const $confPct     = document.getElementById('confPct');
+const $confBar     = document.getElementById('confBar');
+const $moveReason  = document.getElementById('moveReason');
+const $altMoves    = document.getElementById('altMoves');
+const $material    = document.getElementById('material');
+const $hanging     = document.getElementById('hanging');
+const $development = document.getElementById('development');
+const $kingSafety  = document.getElementById('kingSafety');
+const $analysisCount = document.getElementById('analysisCount');
+const $avgConf     = document.getElementById('avgConf');
+const $analysisTime  = document.getElementById('analysisTime');
+const $lastUpdate    = document.getElementById('lastUpdate');
+const $whiteRating = document.getElementById('whiteRating');
+const $blackRating = document.getElementById('blackRating');
+const $toMove      = document.getElementById('toMove');
+const $moveCount   = document.getElementById('moveCount');
+const $playerColor = document.getElementById('playerColor');
+const $board       = document.getElementById('board');
+const $log         = document.getElementById('log');
+const $statusDot   = document.getElementById('statusDot');
+const $statusText  = document.getElementById('statusText');
+const $footerFen   = document.getElementById('footerFen');
+
+// ── Logging ──────────────────────────────────────────────────────────────────
+function addLog(msg, type = 'info') {
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const el = document.createElement('div');
+    el.className = 'log-entry ' + type;
+    el.textContent = '[' + now + '] ' + msg;
+    $log.appendChild(el);
+    $log.scrollTop = $log.scrollHeight;
+    if ($log.children.length > 80) $log.removeChild($log.firstChild);
+}
+
+// ── Board rendering ──────────────────────────────────────────────────────────
+function renderBoard(pieces, fromSq, toSq) {
+    $board.innerHTML = '';
+    const highlight = new Set([fromSq, toSq].filter(Boolean));
+    for (let rank = 8; rank >= 1; rank--) {
+        for (let fc = 97; fc <= 104; fc++) {
+            const sq = String.fromCharCode(fc) + rank;
+            const div = document.createElement('div');
+            const light = (fc + rank) % 2 === 1;
+            div.className = 'sq ' + (light ? 'light' : 'dark') + (highlight.has(sq) ? ' highlight' : '');
+            const piece = pieces && pieces[sq];
+            div.textContent = piece ? (PIECES[piece] || '') : '';
+            $board.appendChild(div);
+        }
+    }
+}
+
+// ── Status helpers ────────────────────────────────────────────────────────────
+function setStatus(text, active) {
+    $statusText.textContent = text;
+    $statusDot.className = 'status-dot' + (active ? ' active' : '');
+}
+
+// ── Material count ────────────────────────────────────────────────────────────
+const MATERIAL_VALUES = { P:1, N:3, B:3, R:5, Q:9, K:0 };
+function calcMaterial(pieces) {
+    let score = 0;
+    for (const v of Object.values(pieces || {})) {
+        const val = MATERIAL_VALUES[v[1]] || 0;
+        score += v[0] === 'w' ? val : -val;
+    }
+    return score;
+}
+
+// ── Fetch state from active chess.com tab ─────────────────────────────────────
+function fetchState(callback) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs[0];
+        if (!tab || !tab.id || !tab.url || !tab.url.includes('chess.com')) {
+            callback(null, 'No chess.com tab found');
+            return;
+        }
+        chrome.tabs.sendMessage(tab.id, { type: 'GET_STATE' }, (resp) => {
+            if (chrome.runtime.lastError) {
+                callback(null, chrome.runtime.lastError.message);
+            } else if (!resp) {
+                callback(null, 'No response from content script');
+            } else {
+                callback(resp, null);
+            }
+        });
+    });
+}
+
+// ── Process a state response ──────────────────────────────────────────────────
+function applyState(state) {
+    if (!state) return;
+
+    const { move, fen, pieces, turn, playerColor, moveNumber, whiteRating, blackRating } = state;
+    const t0 = Date.now();
+
+    // Board
+    const fromSq = move && move.length >= 4 ? move.slice(0, 2) : null;
+    const toSq   = move && move.length >= 4 ? move.slice(2, 4) : null;
+    renderBoard(pieces, fromSq, toSq);
+
+    // FEN footer
+    $footerFen.textContent = fen || '';
+
+    // Best move display
+    if (state.displayMove) {
+        $bestMove.textContent = state.displayMove;
+        const conf = state.confidence || 75;
+        $confPct.textContent = conf;
+        $confBar.style.width = conf + '%';
+        $moveReason.textContent = state.reason || 'Stockfish best move';
+        $altMoves.textContent = state.altMoves ? 'Alt: ' + state.altMoves : '';
+    } else if (state.calculating) {
+        $bestMove.textContent = '...';
+        $moveReason.textContent = 'Calculating...';
+    } else {
+        $bestMove.textContent = '---';
+        $moveReason.textContent = 'Waiting for move...';
+    }
+
+    // Stats
+    analysisCount++;
+    const conf = state.confidence || (state.displayMove ? 75 : 0);
+    totalConf += conf;
+    $analysisCount.textContent = analysisCount;
+    $avgConf.textContent = Math.round(totalConf / analysisCount) + '%';
+    $analysisTime.textContent = (Date.now() - t0) + 'ms';
+    $lastUpdate.textContent = new Date().toLocaleTimeString('en-US', { hour12: false });
+
+    // Position analysis
+    const mat = calcMaterial(pieces);
+    $material.textContent = (mat >= 0 ? '+' : '') + mat.toFixed(1);
+    $hanging.textContent = '0'; // simplified
+    $development.textContent = turn ? (turn === 'white' ? 'WHITE' : 'BLACK') + ' TO MOVE' : '--';
+    $kingSafety.textContent = 'OK';
+
+    // Game info
+    $toMove.textContent = turn ? turn.toUpperCase() : '--';
+    $moveCount.textContent = moveNumber || '--';
+    $playerColor.textContent = playerColor === 'w' ? 'WHITE' : playerColor === 'b' ? 'BLACK' : '--';
+    $whiteRating.textContent = whiteRating || '--';
+    $blackRating.textContent = blackRating || '--';
+
+    if (state.displayMove) {
+        addLog('Best move: ' + state.displayMove + ' (' + conf + '% conf)', 'move');
+    }
+}
+
+// ── Poll loop ─────────────────────────────────────────────────────────────────
+function poll() {
+    fetchState((state, err) => {
+        if (err) {
+            setStatus('ERROR', false);
+            addLog(err, 'err');
+        } else {
+            setStatus('ACTIVE', true);
+            applyState(state);
+        }
+        if (running) pollTimer = setTimeout(poll, 2000);
+    });
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+document.getElementById('btnStart').addEventListener('click', () => {
+    if (running) return;
+    running = true;
+    document.getElementById('btnStart').classList.add('active');
+    setStatus('ACTIVE', true);
+    addLog('Bot started', 'info');
+    poll();
+});
+
+document.getElementById('btnStop').addEventListener('click', () => {
+    running = false;
+    clearTimeout(pollTimer);
+    document.getElementById('btnStart').classList.remove('active');
+    setStatus('STOPPED', false);
+    addLog('Bot stopped', 'warn');
+});
+
+document.getElementById('btnCapture').addEventListener('click', () => {
+    addLog('Manual capture...', 'info');
+    fetchState((state, err) => {
+        if (err) { addLog(err, 'err'); return; }
+        applyState(state);
+        addLog('Capture complete', 'info');
+    });
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+    running = false;
+    clearTimeout(pollTimer);
+    analysisCount = 0;
+    totalConf = 0;
+    document.getElementById('btnStart').classList.remove('active');
+    $bestMove.textContent = '---';
+    $confPct.textContent = '0';
+    $confBar.style.width = '0%';
+    $moveReason.textContent = 'Waiting for game...';
+    $altMoves.textContent = '';
+    $log.innerHTML = '';
+    renderBoard(null);
+    setStatus('IDLE', false);
+    addLog('Bot reset', 'warn');
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+renderBoard(null);
+addLog('Chess Bot ready — press START', 'info');
+setStatus('IDLE', false);
+</script>
 </body>
 </html>

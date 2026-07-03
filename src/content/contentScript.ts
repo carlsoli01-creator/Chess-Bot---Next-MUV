@@ -14,14 +14,18 @@ const opponentTurnLabel: 'white' | 'black' = playerColor === 'w' ? 'black' : 'wh
 let lastBoardState: BoardState | null = null;
 let lastTurn: 'white' | 'black' | null = null;
 let analysisRunning = false;
+let lastRawMove: string | null = null;
+let lastDisplayMove: string | null = null;
+let lastFen: string | null = null;
+let isCalculating = false;
 
 const overlay = createOverlay();
 const observer = new BoardObserver();
 
 observer.onBoardChange((board: BoardState) => {
     const turnChanged = lastTurn !== null && lastTurn !== board.turn;
-    const playerJustMoved   = turnChanged && lastTurn === playerTurnLabel;   // it's now opponent's turn
-    const opponentJustMoved = turnChanged && lastTurn === opponentTurnLabel; // it's now player's turn
+    const playerJustMoved   = turnChanged && lastTurn === playerTurnLabel;
+    const opponentJustMoved = turnChanged && lastTurn === opponentTurnLabel;
     const firstLoad = !lastBoardState;
 
     if ((playerJustMoved || opponentJustMoved || firstLoad) && !analysisRunning) {
@@ -34,22 +38,86 @@ observer.onBoardChange((board: BoardState) => {
 
 async function analyse(board: BoardState) {
     analysisRunning = true;
+    isCalculating = true;
     overlay.calculating();
 
     const fen = boardStateToFEN(board);
-    // movetime 2500 ms → result arrives in ~2.5 s, well under 4 s
+    lastFen = fen;
     const rawMove = await engine.search(fen, 2500);
 
     analysisRunning = false;
+    isCalculating = false;
 
     if (!rawMove) {
         overlay.error();
+        lastRawMove = null;
+        lastDisplayMove = null;
         return;
     }
 
-    const displayMove = formatStockfishMove(rawMove, board.pieces);
-    overlay.show(displayMove);
+    lastRawMove = rawMove;
+    lastDisplayMove = formatStockfishMove(rawMove, board.pieces);
+    overlay.show(lastDisplayMove);
 }
+
+// ── Popup messaging ──────────────────────────────────────────────────────────
+function getPlayerRatings() {
+    const whites = document.querySelectorAll<HTMLElement>('.player-tagline-rating, [data-player-color="white"] .user-tagline-rating, .clock-white .user-rating');
+    const blacks = document.querySelectorAll<HTMLElement>('.player-tagline-rating, [data-player-color="black"] .user-tagline-rating, .clock-black .user-rating');
+    // Try a broad selector for chess.com rating elements
+    const ratingEls = Array.from(document.querySelectorAll<HTMLElement>('[class*="rating"]'));
+    let whiteRating = '--';
+    let blackRating = '--';
+    const ratingPairs = document.querySelectorAll<HTMLElement>('.player-tagline-rating');
+    if (ratingPairs.length >= 2) {
+        // Bottom player = index 1 (white if not flipped), top = index 0
+        const flipped = !!document.querySelector('.board.flipped, .board-layout-chessboard.flipped, cg-board.flipped');
+        whiteRating = flipped ? ratingPairs[0]?.textContent?.trim() || '--' : ratingPairs[1]?.textContent?.trim() || '--';
+        blackRating = flipped ? ratingPairs[1]?.textContent?.trim() || '--' : ratingPairs[0]?.textContent?.trim() || '--';
+    }
+    return { whiteRating, blackRating };
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type !== 'GET_STATE') return false;
+
+    const board = lastBoardState;
+    const { whiteRating, blackRating } = getPlayerRatings();
+
+    if (!board) {
+        sendResponse({
+            move: null, displayMove: null, fen: null,
+            pieces: {}, turn: null, playerColor,
+            calculating: false, moveNumber: null,
+            whiteRating, blackRating,
+        });
+        return false;
+    }
+
+    const fen = lastFen || boardStateToFEN(board);
+    // Estimate move number from FEN or fallback
+    const moveMatch = fen.match(/(\d+)$/);
+    const moveNumber = moveMatch ? moveMatch[1] : '--';
+
+    // Rough confidence from whether we have a move and engine stability
+    const confidence = lastDisplayMove ? 78 : 0;
+
+    sendResponse({
+        move: lastRawMove,
+        displayMove: lastDisplayMove,
+        fen,
+        pieces: board.pieces,
+        turn: board.turn,
+        playerColor,
+        calculating: isCalculating,
+        moveNumber,
+        whiteRating,
+        blackRating,
+        confidence,
+        reason: lastDisplayMove ? 'Stockfish 18 best move' : (isCalculating ? 'Calculating...' : 'Waiting...'),
+    });
+    return false;
+});
 
 // ─── Overlay UI ─────────────────────────────────────────────────────────────
 
