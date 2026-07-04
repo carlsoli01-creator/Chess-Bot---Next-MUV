@@ -117,12 +117,17 @@
     <div class="left-col">
 
         <div class="move-display">
-            <div class="move-label">BEST MOVE</div>
+            <div class="move-label">YOUR BEST MOVE</div>
             <div class="move-value" id="bestMove">---</div>
             <div class="move-confidence">Confidence: <span id="confPct">0</span>%</div>
             <div class="progress-bar"><div class="progress-fill" id="confBar"></div></div>
             <div class="move-reason" id="moveReason">Waiting for game...</div>
-            <div class="alt-moves" id="altMoves"></div>
+        </div>
+
+        <div class="move-display" style="border-color: rgba(0,255,255,0.5); margin-top: 0;">
+            <div class="move-label" style="color:#00aaaa;">OPPONENT LIKELY PLAYS</div>
+            <div class="move-value" id="oppMove" style="color:#00ffff; font-size:22px;">---</div>
+            <div class="move-reason" id="oppCategory" style="color:#00aaaa;">Based on ELO rating</div>
         </div>
 
         <div class="panel">
@@ -196,7 +201,8 @@ const $bestMove    = document.getElementById('bestMove');
 const $confPct     = document.getElementById('confPct');
 const $confBar     = document.getElementById('confBar');
 const $moveReason  = document.getElementById('moveReason');
-const $altMoves    = document.getElementById('altMoves');
+const $oppMove     = document.getElementById('oppMove');
+const $oppCategory = document.getElementById('oppCategory');
 const $material    = document.getElementById('material');
 const $hanging     = document.getElementById('hanging');
 const $development = document.getElementById('development');
@@ -296,20 +302,28 @@ function applyState(state) {
     // FEN footer
     $footerFen.textContent = fen || '';
 
-    // Best move display
+    // Best move display (Stockfish)
     if (state.displayMove) {
         $bestMove.textContent = state.displayMove;
         const conf = state.confidence || 75;
         $confPct.textContent = conf;
         $confBar.style.width = conf + '%';
-        $moveReason.textContent = state.reason || 'Stockfish best move';
-        $altMoves.textContent = state.altMoves ? 'Alt: ' + state.altMoves : '';
+        $moveReason.textContent = 'Stockfish 18 best move';
     } else if (state.calculating) {
         $bestMove.textContent = '...';
         $moveReason.textContent = 'Calculating...';
     } else {
         $bestMove.textContent = '---';
-        $moveReason.textContent = 'Waiting for move...';
+        $moveReason.textContent = 'Waiting for opponent to move...';
+    }
+
+    // Opponent predicted move (MoveEstimator ELO algorithm)
+    if (state.predictedOpponentMove) {
+        $oppMove.textContent = state.predictedOpponentMove.toUpperCase();
+        $oppCategory.textContent = state.eloCategory ? 'ELO level: ' + state.eloCategory : 'Based on ELO rating';
+    } else {
+        $oppMove.textContent = '---';
+        $oppCategory.textContent = 'Based on ELO rating';
     }
 
     // Stats
