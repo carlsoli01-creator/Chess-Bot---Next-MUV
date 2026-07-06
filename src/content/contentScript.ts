@@ -1,55 +1,43 @@
 import BoardObserver from './boardObserver';
-import { StockfishEngine } from '../engine/stockfishEngine';
-import { boardStateToFEN, formatStockfishMove } from '../engine/fenConverter';
+import { boardStateToFEN } from '../engine/fenConverter';
 import { detectPlayerColor } from '../engine/chessEngine';
 import { MoveEstimator } from '../models/moveEstimator';
 import { EloModel } from '../models/eloModel';
 import { BoardState } from '../types';
 
-const engine = new StockfishEngine();
-
 const playerColor = detectPlayerColor();
-const playerTurnLabel: 'white' | 'black' = playerColor === 'w' ? 'white' : 'black';
 const opponentTurnLabel: 'white' | 'black' = playerColor === 'w' ? 'black' : 'white';
 
 let lastBoardState: BoardState | null = null;
 let lastTurn: 'white' | 'black' | null = null;
 let analysisRunning = false;
 
-// Shared state for popup queries
-let lastRawMove: string | null = null;
 let lastDisplayMove: string | null = null;
 let lastFen: string | null = null;
-let lastPredictedOpponentMove: string | null = null;
 let lastConfidence: number = 0;
-let lastReason: string = '';
 let lastEloCategory: string = '';
 let isCalculating = false;
 
-// Scrape opponent ELO from chess.com DOM
 function scrapeOpponentElo(): number {
     const flipped = !!document.querySelector('.board.flipped, .board-layout-chessboard.flipped');
-    // Bottom player = player, top player = opponent
     const ratingEls = Array.from(document.querySelectorAll<HTMLElement>('.player-tagline-rating, .user-tagline-rating'));
-    // chess.com lists top player first, bottom player second
     const opponentEl = flipped ? ratingEls[1] : ratingEls[0];
     if (opponentEl) {
         const text = opponentEl.textContent?.replace(/[^\d]/g, '');
         const rating = text ? parseInt(text, 10) : NaN;
         if (!isNaN(rating) && rating > 0) return rating;
     }
-    return 1200; // sensible default
+    return 1200;
 }
 
 function scrapePlayerRatings() {
     const flipped = !!document.querySelector('.board.flipped, .board-layout-chessboard.flipped');
     const ratingEls = Array.from(document.querySelectorAll<HTMLElement>('.player-tagline-rating, .user-tagline-rating'));
-    // Top player = index 0, bottom = index 1
-    const topRating   = ratingEls[0]?.textContent?.trim() || '--';
+    const topRating    = ratingEls[0]?.textContent?.trim() || '--';
     const bottomRating = ratingEls[1]?.textContent?.trim() || '--';
     return {
         whiteRating: flipped ? bottomRating : topRating,
-        blackRating:  flipped ? topRating : bottomRating,
+        blackRating:  flipped ? topRating   : bottomRating,
     };
 }
 
@@ -58,7 +46,7 @@ const observer = new BoardObserver();
 
 observer.onBoardChange((board: BoardState) => {
     const turnChanged = lastTurn !== null && lastTurn !== board.turn;
-    const opponentJustMoved = turnChanged && lastTurn === opponentTurnLabel; // now it's player's turn
+    const opponentJustMoved = turnChanged && lastTurn === opponentTurnLabel;
     const firstLoad = !lastBoardState;
 
     if ((opponentJustMoved || firstLoad) && !analysisRunning) {
@@ -69,7 +57,7 @@ observer.onBoardChange((board: BoardState) => {
     lastTurn = board.turn;
 });
 
-async function analyse(board: BoardState) {
+function analyse(board: BoardState) {
     analysisRunning = true;
     isCalculating = true;
     overlay.calculating();
@@ -81,37 +69,19 @@ async function analyse(board: BoardState) {
     const eloModel = new EloModel(opponentElo);
     const estimator = new MoveEstimator(opponentElo);
 
-    // Run Stockfish and ELO prediction in parallel
-    const [rawMove, predictedOpponent] = await Promise.all([
-        engine.search(fen, 2500),
-        Promise.resolve(estimator.estimateMove(board, opponentElo)),
-    ]);
-
-    const probability = eloModel.calculateProbability(predictedOpponent.to, opponentElo);
+    const predicted = estimator.estimateMove(board, opponentElo);
+    const probability = eloModel.calculateProbability(predicted.to, opponentElo);
     const confidence = Math.round(probability * 100);
     const eloCategory = eloModel.getCategory();
-    const eloDesc = eloModel.getAccuracyDescription();
 
-    lastPredictedOpponentMove = predictedOpponent.to;
-    lastEloCategory = eloCategory;
+    lastDisplayMove = predicted.to.toUpperCase();
     lastConfidence = confidence;
+    lastEloCategory = eloCategory;
 
     analysisRunning = false;
     isCalculating = false;
 
-    if (!rawMove) {
-        overlay.error();
-        lastRawMove = null;
-        lastDisplayMove = null;
-        lastReason = 'Engine error';
-        return;
-    }
-
-    lastRawMove = rawMove;
-    lastDisplayMove = formatStockfishMove(rawMove, board.pieces);
-    lastReason = `Stockfish best · Opp likely: ${predictedOpponent.to} (${eloCategory})`;
-
-    overlay.show(lastDisplayMove, lastReason);
+    overlay.show(lastDisplayMove, `Opp likely (${eloCategory}) · ${confidence}% conf`);
 }
 
 // ── Popup messaging ──────────────────────────────────────────────────────────
@@ -123,22 +93,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
     if (!board) {
         sendResponse({
-            move: null, displayMove: null, fen: null,
-            pieces: {}, turn: null, playerColor,
-            calculating: false, moveNumber: null,
-            whiteRating, blackRating, confidence: 0,
-            predictedOpponentMove: null, eloCategory: '',
+            displayMove: null, fen: null, pieces: {}, turn: null,
+            playerColor, calculating: false, moveNumber: null,
+            whiteRating, blackRating, confidence: 0, eloCategory: '',
             reason: 'No board detected',
         });
         return false;
     }
 
     const fen = lastFen || boardStateToFEN(board);
-    const fenParts = fen.split(' ');
-    const moveNumber = fenParts[5] || '--';
+    const moveNumber = fen.split(' ')[5] || '--';
 
     sendResponse({
-        move: lastRawMove,
         displayMove: lastDisplayMove,
         fen,
         pieces: board.pieces,
@@ -149,9 +115,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         whiteRating,
         blackRating,
         confidence: lastConfidence,
-        predictedOpponentMove: lastPredictedOpponentMove,
         eloCategory: lastEloCategory,
-        reason: lastReason || (isCalculating ? 'Calculating...' : 'Waiting for opponent move...'),
+        reason: lastDisplayMove
+            ? `Opponent likely plays (${lastEloCategory}) · ${lastConfidence}% confidence`
+            : (isCalculating ? 'Calculating...' : 'Waiting for opponent move...'),
     });
     return false;
 });
@@ -173,7 +140,7 @@ function createOverlay() {
             backdrop-filter: blur(6px);
             transition: border-color 0.25s;
             font-family: ui-monospace, 'Courier New', monospace;
-            min-width: 120px;
+            min-width: 130px;
         }
         .cmp-wrap.calc  { border-color: rgba(250,204,21,0.6); }
         .cmp-wrap.ready { border-color: rgba(34,197,94,0.7); }
@@ -197,8 +164,7 @@ function createOverlay() {
         .cmp-text {
             font-size: 18px; font-weight: 800;
             letter-spacing: 0.09em; color: #e2e8f0;
-            text-transform: uppercase;
-            transition: color 0.25s;
+            text-transform: uppercase; transition: color 0.25s;
         }
         .cmp-wrap.calc  .cmp-text { color: #fde68a; }
         .cmp-wrap.ready .cmp-text { color: #86efac; }
@@ -206,7 +172,7 @@ function createOverlay() {
 
         .cmp-sub {
             font-size: 10px; color: #94a3b8;
-            max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            max-width: 210px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
     `;
     document.head.appendChild(style);
@@ -234,7 +200,6 @@ function createOverlay() {
     wrap.appendChild(sub);
     document.body.appendChild(wrap);
 
-    // Drag support
     let dragging = false, ox = 0, oy = 0, il = 0, it = 0;
     wrap.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
@@ -253,20 +218,8 @@ function createOverlay() {
     wrap.addEventListener('pointerup', (e) => { dragging = false; wrap.releasePointerCapture(e.pointerId); });
 
     return {
-        calculating() {
-            text.textContent = '...';
-            sub.textContent = 'Analysing...';
-            wrap.className = 'cmp-wrap calc';
-        },
-        show(move: string, reason: string = '') {
-            text.textContent = move || '?';
-            sub.textContent = reason;
-            wrap.className = 'cmp-wrap ready';
-        },
-        error() {
-            text.textContent = '!';
-            sub.textContent = 'Engine error';
-            wrap.className = 'cmp-wrap err';
-        },
+        calculating() { text.textContent = '...'; sub.textContent = 'Analysing...'; wrap.className = 'cmp-wrap calc'; },
+        show(move: string, reason = '') { text.textContent = move || '?'; sub.textContent = reason; wrap.className = 'cmp-wrap ready'; },
+        error()  { text.textContent = '!'; sub.textContent = 'Error'; wrap.className = 'cmp-wrap err'; },
     };
 }
